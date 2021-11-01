@@ -64,6 +64,7 @@ use super::{
     },
 };
 use crate::logical_plan::builder::project_with_alias;
+use std::borrow::BorrowMut;
 
 /// The ContextProvider trait allows the query planner to obtain meta-data about tables and
 /// functions referenced in SQL statements
@@ -130,7 +131,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 analyze,
                 describe_alias: _,
             } => self.explain_statement_to_plan(*verbose, *analyze, statement),
-            Statement::Query(query) => self.query_to_plan(query),
+            Statement::Query(query) => self.query_to_plan(*query),
             Statement::ShowVariable { variable } => self.show_variable_to_plan(variable),
             Statement::ShowColumns {
                 extended,
@@ -145,8 +146,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     }
 
     /// Generate a logic plan from an SQL query
-    pub fn query_to_plan(&self, query: &Query) -> Result<LogicalPlan> {
-        self.query_to_plan_with_alias(query, None, &mut HashMap::new())
+    pub fn query_to_plan(&self, mut query: Query) -> Result<LogicalPlan> {
+        // rewrite query
+        rewrite_query(&mut query);
+        self.query_to_plan_with_alias(&query, None, &mut HashMap::new())
     }
 
     /// Generate a logic plan from an SQL query with optional alias

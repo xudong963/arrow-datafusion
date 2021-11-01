@@ -20,4 +20,5 @@
 
 pub mod parser;
 pub mod planner;
+pub mod rewrite_sql;
 pub(crate) mod utils;
