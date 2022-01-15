@@ -697,7 +697,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         alias: Option<String>,
     ) -> Result<LogicalPlan> {
         let plans = self.plan_from_tables(&select.from, ctes)?;
-
         let plan = match &select.selection {
             Some(predicate_expr) => {
                 // build join schema
@@ -714,10 +713,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 extract_possible_join_keys(&filter_expr, &mut possible_join_keys)?;
 
                 let mut all_join_keys = HashSet::new();
-                let mut left = plans[0].clone();
-                for right in plans.iter().skip(1) {
+                let mut mut_plans = plans.clone();
+                let mut left = mut_plans[0].clone();
+                let mut idx = 1;
+                while idx < mut_plans.len() {
                     let left_schema = left.schema();
-                    let right_schema = right.schema();
+                    let right_schema = mut_plans[idx].schema();
                     let mut join_keys = vec![];
                     for (l, r) in &possible_join_keys {
                         if left_schema.field_from_column(l).is_ok()
@@ -731,8 +732,16 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         }
                     }
                     if join_keys.is_empty() {
-                        left =
-                            LogicalPlanBuilder::from(left).cross_join(right)?.build()?;
+                        /// check [1..idx] if contains current plan to avoid infinite loop
+                        if mut_plans[1..idx].contains(&mut_plans[idx])
+                            || idx == mut_plans.len() - 1
+                        {
+                            left = LogicalPlanBuilder::from(left)
+                                .cross_join(&mut_plans[idx])?
+                                .build()?;
+                        } else {
+                            mut_plans.push(mut_plans[idx].clone());
+                        }
                     } else {
                         let left_keys: Vec<Column> =
                             join_keys.iter().map(|(l, _)| l.clone()).collect();
@@ -740,11 +749,16 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             join_keys.iter().map(|(_, r)| r.clone()).collect();
                         let builder = LogicalPlanBuilder::from(left);
                         left = builder
-                            .join(right, JoinType::Inner, (left_keys, right_keys))?
+                            .join(
+                                &mut_plans[idx],
+                                JoinType::Inner,
+                                (left_keys, right_keys),
+                            )?
                             .build()?;
                     }
 
                     all_join_keys.extend(join_keys);
+                    idx += 1;
                 }
 
                 // remove join expressions from filter
@@ -3816,6 +3830,31 @@ mod tests {
         let sql = r#"SELECT person.first_name FROM public.person"#;
         let expected = "Projection: #public.person.first_name\
             \n  TableScan: public.person projection=None";
+        quick_test(sql, expected);
+    }
+
+    #[test]
+    fn cross_join_to_inner_join() {
+        let sql = "select person.id from person, orders, lineitem where person.id = lineitem.l_item_id and orders.o_item_id = lineitem.l_description;";
+        let expected = "Projection: #person.id\
+                                 \n  Join: #lineitem.l_description = #orders.o_item_id\
+                                 \n    Join: #person.id = #lineitem.l_item_id\
+                                 \n      TableScan: person projection=None\
+                                 \n      TableScan: lineitem projection=None\
+                                 \n    TableScan: orders projection=None";
+        quick_test(sql, expected);
+    }
+
+    #[test]
+    fn cross_join_not_to_inner_join() {
+        let sql = "select person.id from person, orders, lineitem where person.id = person.age;";
+        let expected = "Projection: #person.id\
+                                    \n  Filter: #person.id = #person.age\
+                                    \n    CrossJoin:\
+                                    \n      CrossJoin:\
+                                    \n        TableScan: person projection=None\
+                                    \n        TableScan: orders projection=None\
+                                    \n      TableScan: lineitem projection=None";
         quick_test(sql, expected);
     }
 }
