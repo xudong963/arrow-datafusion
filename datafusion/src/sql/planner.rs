@@ -732,7 +732,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         }
                     }
                     if join_keys.is_empty() {
-                        /// check [1..idx] if contains current plan to avoid infinite loop
+                        // check [1..idx] if contains current plan to avoid infinite loop
                         if mut_plans[1..idx].contains(&mut_plans[idx])
                             || idx == mut_plans.len() - 1
                         {
