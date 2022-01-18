@@ -764,7 +764,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         let idx = remaining_plans
                             .iter()
                             .enumerate()
-                            .find(|(idx, plan)| plan.is_some());
+                            .find(|(_idx, plan)| plan.is_some());
                         if let Some((idx, _)) = idx {
                             let plan = std::mem::take(&mut remaining_plans[idx]).unwrap();
                             left = LogicalPlanBuilder::from(left)
