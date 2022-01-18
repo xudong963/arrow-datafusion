@@ -713,52 +713,83 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 extract_possible_join_keys(&filter_expr, &mut possible_join_keys)?;
 
                 let mut all_join_keys = HashSet::new();
-                let mut mut_plans = plans.clone();
-                let mut left = mut_plans[0].clone();
-                let mut idx = 1;
-                while idx < mut_plans.len() {
-                    let left_schema = left.schema();
-                    let right_schema = mut_plans[idx].schema();
+
+                let mut plans = plans.into_iter();
+                let mut left = plans.next().unwrap(); // have at least one plan
+
+                // List of the plans that have not yet been joined
+                let mut remaining_plans: Vec<Option<LogicalPlan>> =
+                    plans.into_iter().map(Some).collect();
+
+                // Take from the list of remaining plans,
+                loop {
                     let mut join_keys = vec![];
-                    for (l, r) in &possible_join_keys {
-                        if left_schema.field_from_column(l).is_ok()
-                            && right_schema.field_from_column(r).is_ok()
-                        {
-                            join_keys.push((l.clone(), r.clone()));
-                        } else if left_schema.field_from_column(r).is_ok()
-                            && right_schema.field_from_column(l).is_ok()
-                        {
-                            join_keys.push((r.clone(), l.clone()));
+
+                    // Search all remaining plans for the next to
+                    // join. Prefer the first one that has a join
+                    // predicate in the predicate lists
+                    let idx = remaining_plans.iter().enumerate().find(|(_idx, plan)| {
+                        // skip plans that have been joined already
+                        let plan = if let Some(plan) = plan {
+                            plan
+                        } else {
+                            return false;
+                        };
+
+                        // can we find a match?
+                        let left_schema = left.schema();
+                        let right_schema = plan.schema();
+                        for (l, r) in &possible_join_keys {
+                            if left_schema.field_from_column(l).is_ok()
+                                && right_schema.field_from_column(r).is_ok()
+                            {
+                                join_keys.push((l.clone(), r.clone()));
+                            } else if left_schema.field_from_column(r).is_ok()
+                                && right_schema.field_from_column(l).is_ok()
+                            {
+                                join_keys.push((r.clone(), l.clone()));
+                            }
                         }
-                    }
+                        // stop if we found join keys
+                        !join_keys.is_empty()
+                    });
+
+                    // If we did not find join keys, either there are
+                    // no more plans, or we can't find any plans that
+                    // can be joined with predicates
                     if join_keys.is_empty() {
-                        // check [1..idx] if contains current plan to avoid infinite loop
-                        if mut_plans[1..idx].contains(&mut_plans[idx])
-                            || idx == mut_plans.len() - 1
-                        {
+                        assert!(idx.is_none());
+
+                        // pick the first non null plan to join
+                        let idx = remaining_plans
+                            .iter()
+                            .enumerate()
+                            .find(|(idx, plan)| plan.is_some());
+                        if let Some((idx, _)) = idx {
+                            let plan = std::mem::take(&mut remaining_plans[idx]).unwrap();
                             left = LogicalPlanBuilder::from(left)
-                                .cross_join(&mut_plans[idx])?
+                                .cross_join(&plan)?
                                 .build()?;
                         } else {
-                            mut_plans.push(mut_plans[idx].clone());
+                            // no more plans to join
+                            break;
                         }
                     } else {
+                        // have a plan
+                        let (idx, _) = idx.expect("found plan node");
+                        let plan = std::mem::take(&mut remaining_plans[idx]).unwrap();
+
                         let left_keys: Vec<Column> =
                             join_keys.iter().map(|(l, _)| l.clone()).collect();
                         let right_keys: Vec<Column> =
                             join_keys.iter().map(|(_, r)| r.clone()).collect();
                         let builder = LogicalPlanBuilder::from(left);
                         left = builder
-                            .join(
-                                &mut_plans[idx],
-                                JoinType::Inner,
-                                (left_keys, right_keys),
-                            )?
+                            .join(&plan, JoinType::Inner, (left_keys, right_keys))?
                             .build()?;
                     }
 
                     all_join_keys.extend(join_keys);
-                    idx += 1;
                 }
 
                 // remove join expressions from filter
