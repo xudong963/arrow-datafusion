@@ -15,23 +15,26 @@
 // specific language governing permissions and limitations
 // under the License.
 
-pub mod common_subexpr_eliminate;
-pub mod eliminate_filter;
-pub mod eliminate_limit;
-pub mod expr_simplifier;
-pub mod filter_null_join_keys;
-pub mod filter_push_down;
-pub mod limit_push_down;
-pub mod optimizer;
-pub mod projection_push_down;
-pub mod reduce_outer_join;
-pub mod simplify_expressions;
-pub mod single_distinct_to_groupby;
-pub mod subquery_filter_to_join;
-pub mod utils;
-pub mod cross_to_inner_join;
+use datafusion_expr::LogicalPlan;
+use crate::{OptimizerConfig, OptimizerRule};
+use datafusion_common::Result;
 
-#[cfg(test)]
-pub mod test;
+#[derive(Default)]
+pub struct CrossToInnerJoin;
 
-pub use optimizer::{OptimizerConfig, OptimizerRule};
+impl CrossToInnerJoin {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+}
+
+impl OptimizerRule for CrossToInnerJoin {
+    fn optimize(&self, plan: &LogicalPlan, optimizer_config: &OptimizerConfig) -> Result<LogicalPlan> {
+        unimplemented!()
+    }
+
+    fn name(&self) -> &str {
+        "cross_to_inner_join"
+    }
+}

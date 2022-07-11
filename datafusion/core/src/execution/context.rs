@@ -105,6 +105,7 @@ use datafusion_sql::{
 };
 use parquet::file::properties::WriterProperties;
 use uuid::Uuid;
+use datafusion_optimizer::cross_to_inner_join::CrossToInnerJoin;
 
 use super::options::{
     AvroReadOptions, CsvReadOptions, NdJsonReadOptions, ParquetReadOptions,
@@ -1258,6 +1259,7 @@ impl SessionState {
         if config.config_options.get_bool(OPT_FILTER_NULL_JOIN_KEYS) {
             rules.push(Arc::new(FilterNullJoinKeys::default()));
         }
+        rules.push(Arc::new(CrossToInnerJoin::new()));
         rules.push(Arc::new(ReduceOuterJoin::new()));
         rules.push(Arc::new(FilterPushDown::new()));
         rules.push(Arc::new(LimitPushDown::new()));
