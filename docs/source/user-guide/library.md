@@ -19,7 +19,6 @@
 
 # Using DataFusion as a library
 
-## Create a new project
 
 ```shell
 cargo new hello_datafusion
