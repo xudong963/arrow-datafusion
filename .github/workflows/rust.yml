@@ -24,7 +24,15 @@ concurrency:
 on:
   # always trigger on PR
   push:
+    paths-ignore:
+      - "docs/**"
+      - "**.md"
+      - ".github/**"
   pull_request:
+    paths-ignore:
+      - "docs/**"
+      - "**.md"
+      - ".github/**"
   # manual trigger
   # https://docs.github.com/en/actions/managing-workflow-runs/manually-running-a-workflow
   workflow_dispatch:
