@@ -932,7 +932,8 @@ fn add_hash_on_top(
 /// # Arguments
 ///
 /// * `input`: Current node.
-/// * `fetch`: Possible fetch value
+/// * `fetch`: Possible fetch value. If a `SortPreservingMerge` is created
+///   its fetch is set to this value and `fetch` is set to `None`
 ///
 /// # Returns
 ///
