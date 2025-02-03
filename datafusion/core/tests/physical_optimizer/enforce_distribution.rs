@@ -3252,7 +3252,7 @@ async fn apply_enforce_distribution_multiple_times() -> Result<()> {
         .unwrap();
 
     let batch = results.next().await.unwrap()?;
-    // With the fix of https://github.com/apache/datafusion/pull/14207, the number of rows will be 10
+    // Without the fix of https://github.com/apache/datafusion/pull/14207, the number of rows will be 10
     assert_eq!(batch.num_rows(), 5);
     Ok(())
 }
