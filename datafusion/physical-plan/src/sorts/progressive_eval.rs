@@ -146,8 +146,9 @@ impl DisplayAs for ProgressiveEvalExec {
                     write!(f, "fetch={fetch}, ")?;
                 };
                 if let Some(value_ranges) = &self.value_ranges {
-                    write!(f, "input_ranges={value_ranges:?}")?;
+                    write!(f, "input_ranges={value_ranges:?}, ")?;
                 };
+                write!(f, "partition_groups={:?}", self.partition_groups)?;
 
                 Ok(())
             }
