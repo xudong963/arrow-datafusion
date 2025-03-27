@@ -949,14 +949,14 @@ fn add_spm_on_top(input: DistributionContext) -> DistributionContext {
         let should_preserve_ordering = input.plan.output_ordering().is_some();
 
         let new_plan = if should_preserve_ordering {
-            Arc::new(SortPreservingMergeExec::new(
+            SortPreservingMergeExec::new(
                 input
                     .plan
                     .output_ordering()
                     .unwrap_or(&LexOrdering::default())
                     .clone(),
                 Arc::clone(&input.plan),
-            )) as _
+            ) as _
         } else {
             Arc::new(CoalescePartitionsExec::new(Arc::clone(&input.plan))) as _
         };

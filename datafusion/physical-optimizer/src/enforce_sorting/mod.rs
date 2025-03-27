@@ -394,7 +394,7 @@ pub fn parallelize_sorts(
             SortPreservingMergeExec::new(sort_exprs, Arc::clone(&requirements.plan));
         Ok(Transformed::yes(
             PlanWithCorrespondingCoalescePartitions::new(
-                Arc::new(spm.with_fetch(fetch)),
+                spm.with_fetch(fetch).unwrap(),
                 false,
                 vec![requirements],
             ),
@@ -508,10 +508,10 @@ fn analyze_immediate_sort_removal(
             {
                 // Replace the sort with a sort-preserving merge:
                 let expr = LexOrdering::new(sort_exec.expr().to_vec());
-                Arc::new(
-                    SortPreservingMergeExec::new(expr, Arc::clone(sort_input))
-                        .with_fetch(sort_exec.fetch()),
-                ) as _
+
+                SortPreservingMergeExec::new(expr, Arc::clone(sort_input))
+                    .with_fetch(sort_exec.fetch())
+                    .unwrap()
             } else {
                 // Remove the sort:
                 node.children = node.children.swap_remove(0).children;
@@ -737,10 +737,9 @@ fn remove_corresponding_sort_from_sub_plan(
         let plan = Arc::clone(&node.plan);
         let fetch = plan.fetch();
         let plan = if let Some(ordering) = plan.output_ordering() {
-            Arc::new(
-                SortPreservingMergeExec::new(LexOrdering::new(ordering.to_vec()), plan)
-                    .with_fetch(fetch),
-            ) as _
+            SortPreservingMergeExec::new(LexOrdering::new(ordering.to_vec()), plan)
+                .with_fetch(fetch)
+                .unwrap()
         } else {
             Arc::new(CoalescePartitionsExec::new(plan)) as _
         };

@@ -23,6 +23,15 @@ use std::{
     fmt::Result as FmtResult, marker::PhantomData, sync::Arc,
 };
 
+use crate::file_groups::FileGroup;
+use crate::{
+    display::FileGroupsDisplay,
+    file::FileSource,
+    file_compression_type::FileCompressionType,
+    file_stream::FileStream,
+    source::{DataSource, DataSourceExec},
+    PartitionedFile,
+};
 use arrow::{
     array::{
         ArrayData, ArrayRef, BufferBuilder, DictionaryArray, RecordBatch,
@@ -31,6 +40,7 @@ use arrow::{
     buffer::Buffer,
     datatypes::{ArrowNativeType, DataType, Field, Schema, SchemaRef, UInt16Type},
 };
+use datafusion_common::stats::Precision;
 use datafusion_common::{exec_err, ColumnStatistics, Constraints, Result, Statistics};
 use datafusion_common::{DataFusionError, ScalarValue};
 use datafusion_execution::{
@@ -40,6 +50,7 @@ use datafusion_physical_expr::{
     expressions::Column, EquivalenceProperties, LexOrdering, Partitioning,
     PhysicalSortExpr,
 };
+use datafusion_physical_plan::statistics::MinMaxStatistics;
 use datafusion_physical_plan::{
     display::{display_orderings, ProjectSchemaDisplay},
     metrics::ExecutionPlanMetricsSet,
@@ -47,17 +58,6 @@ use datafusion_physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan,
 };
 use log::{debug, warn};
-
-use crate::file_groups::FileGroup;
-use crate::{
-    display::FileGroupsDisplay,
-    file::FileSource,
-    file_compression_type::FileCompressionType,
-    file_stream::FileStream,
-    source::{DataSource, DataSourceExec},
-    statistics::MinMaxStatistics,
-    PartitionedFile,
-};
 
 /// The base configurations for a [`DataSourceExec`], the a physical plan for
 /// any given file format.
@@ -602,7 +602,7 @@ impl FileScanConfig {
             return Ok(vec![]);
         }
 
-        let statistics = MinMaxStatistics::new_from_files(
+        let statistics = min_max_statistics_from_files(
             sort_order,
             table_schema,
             None,
@@ -696,6 +696,41 @@ impl DisplayAs for FileScanConfig {
 
         Ok(())
     }
+}
+
+/// Construct MinMaxStatistics from a list of files
+fn min_max_statistics_from_files<'a>(
+    projected_sort_order: &LexOrdering, // Sort order with respect to projected schema
+    projected_schema: &SchemaRef,       // Projected schema
+    projection: Option<&Vec<usize>>, // Indices of projection in full table schema (None = all columns)
+    files: impl IntoIterator<Item = &'a PartitionedFile>,
+) -> Result<MinMaxStatistics> {
+    let projected_statistics = files
+        .into_iter()
+        .map(|file| {
+            let mut statistics = file.statistics.clone()?.as_ref().clone();
+            for partition in &file.partition_values {
+                statistics.column_statistics.push(ColumnStatistics {
+                    null_count: Precision::Exact(0),
+                    max_value: Precision::Exact(partition.clone()),
+                    min_value: Precision::Exact(partition.clone()),
+                    sum_value: Precision::Absent,
+                    distinct_count: Precision::Exact(1),
+                });
+            }
+
+            Some(statistics.project(projection))
+        })
+        .collect::<Option<Vec<_>>>()
+        .ok_or_else(|| {
+            DataFusionError::Plan("Parquet file missing statistics".to_string())
+        })?;
+
+    MinMaxStatistics::new_from_statistics(
+        projected_sort_order,
+        projected_schema,
+        &projected_statistics,
+    )
 }
 
 /// A helper that projects partition columns into the file record batches.
@@ -1042,10 +1077,10 @@ fn get_projected_output_ordering(
                 return false;
             }
 
-            let statistics = match MinMaxStatistics::new_from_files(
+            let statistics = match min_max_statistics_from_files(
                 &new_ordering,
                 projected_schema,
-                base_config.projection.as_deref(),
+                base_config.projection.as_ref(),
                 group.iter(),
             ) {
                 Ok(statistics) => statistics,

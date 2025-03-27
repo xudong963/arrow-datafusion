@@ -21,6 +21,7 @@ mod builder;
 mod cursor;
 mod merge;
 pub mod partial_sort;
+mod progressive_eval;
 pub mod sort;
 pub mod sort_preserving_merge;
 mod stream;

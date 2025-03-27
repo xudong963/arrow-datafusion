@@ -340,7 +340,7 @@ fn to_str(options: &SortOptions) -> &str {
 /// descending order.
 #[derive(Debug, Default, Clone, PartialEq, Eq, Hash)]
 pub struct LexOrdering {
-    inner: Vec<PhysicalSortExpr>,
+    pub inner: Vec<PhysicalSortExpr>,
 }
 
 impl AsRef<LexOrdering> for LexOrdering {

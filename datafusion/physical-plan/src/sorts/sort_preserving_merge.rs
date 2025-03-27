@@ -17,9 +17,6 @@
 
 //! [`SortPreservingMergeExec`] merges multiple sorted streams into one sorted stream.
 
-use std::any::Any;
-use std::sync::Arc;
-
 use crate::common::spawn_buffered;
 use crate::limit::LimitStream;
 use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
@@ -29,6 +26,9 @@ use crate::{
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties,
     Partitioning, PlanProperties, SendableRecordBatchStream, Statistics,
 };
+use itertools::Itertools;
+use std::any::Any;
+use std::sync::Arc;
 
 use datafusion_common::{internal_err, Result};
 use datafusion_execution::memory_pool::MemoryConsumer;
@@ -36,6 +36,10 @@ use datafusion_execution::TaskContext;
 use datafusion_physical_expr::PhysicalSortExpr;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
 
+use crate::sorts::progressive_eval::ProgressiveEvalExec;
+use crate::statistics::MinMaxStatistics;
+use crate::stream::RecordBatchStreamAdapter;
+use futures::StreamExt;
 use log::{debug, trace};
 
 /// Sort preserving merge execution plan
@@ -102,15 +106,54 @@ pub struct SortPreservingMergeExec {
 
 impl SortPreservingMergeExec {
     /// Create a new sort execution plan
-    pub fn new(expr: LexOrdering, input: Arc<dyn ExecutionPlan>) -> Self {
+    pub fn new(
+        expr: LexOrdering,
+        input: Arc<dyn ExecutionPlan>,
+    ) -> Arc<dyn ExecutionPlan> {
         let cache = Self::compute_properties(&input, expr.clone());
-        Self {
-            input,
-            expr,
-            metrics: ExecutionPlanMetricsSet::new(),
-            fetch: None,
-            cache,
-            enable_round_robin_repartition: true,
+
+        // Todo: check if partition statistic is accurate
+        // Organize the input partitions into chains,
+        // where elements of each chain are input partitions that are
+        // non-overlapping, and each chain is ordered internally by their min/max statistics.
+        let partition_groups = input
+            .statistics_by_partition()
+            .and_then(|stats| {
+                let min_max =
+                    MinMaxStatistics::new_from_statistics(&expr, &input.schema(), &stats);
+                min_max
+            })
+            .map(|min_max_stats| {
+                let res = min_max_stats.first_fit();
+                res
+            })
+            .inspect_err(|e| {
+                log::debug!(
+                    "error analyzing statistics: {e}\n falling back to full sort-merge"
+                )
+            })
+            .ok()
+            .filter(|groups| {
+                groups.len() < input.properties().partitioning.partition_count()
+            });
+        if let Some(partition_groups) = partition_groups {
+            // Return ProgressiveEvalExec when partition_groups exists
+            Arc::new(ProgressiveEvalExec::new(
+                input,
+                None,
+                None,
+                partition_groups,
+            ))
+        } else {
+            // Return SortPreservingMergeExec otherwise
+            Arc::new(Self {
+                input,
+                expr,
+                metrics: ExecutionPlanMetricsSet::new(),
+                fetch: None,
+                cache,
+                enable_round_robin_repartition: true,
+            })
         }
     }
 
@@ -256,10 +299,11 @@ impl ExecutionPlan for SortPreservingMergeExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(
+        Ok(
             SortPreservingMergeExec::new(self.expr.clone(), Arc::clone(&children[0]))
-                .with_fetch(self.fetch),
-        ))
+                .with_fetch(self.fetch)
+                .unwrap(),
+        )
     }
 
     fn execute(
@@ -374,13 +418,11 @@ impl ExecutionPlan for SortPreservingMergeExec {
             });
         }
 
-        Ok(Some(Arc::new(
-            SortPreservingMergeExec::new(
-                updated_exprs,
-                make_with_child(projection, self.input())?,
-            )
-            .with_fetch(self.fetch()),
-        )))
+        Ok(SortPreservingMergeExec::new(
+            updated_exprs,
+            make_with_child(projection, self.input())?,
+        )
+        .with_fetch(self.fetch()))
     }
 }
 
