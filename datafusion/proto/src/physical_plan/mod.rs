@@ -966,9 +966,9 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                 } else {
                     Some(sort.fetch as usize)
                 };
-                Ok(SortPreservingMergeExec::new(exprs, input)
-                    .with_fetch(fetch)
-                    .unwrap())
+                Ok(Arc::new(
+                    SortPreservingMergeExec::new(exprs, input).with_fetch(fetch),
+                ))
             }
             PhysicalPlanType::Extension(extension) => {
                 let inputs: Vec<Arc<dyn ExecutionPlan>> = extension

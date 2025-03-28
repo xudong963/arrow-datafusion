@@ -26,7 +26,6 @@ use crate::{
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties,
     Partitioning, PlanProperties, SendableRecordBatchStream, Statistics,
 };
-use itertools::Itertools;
 use std::any::Any;
 use std::sync::Arc;
 
@@ -38,8 +37,6 @@ use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
 
 use crate::sorts::progressive_eval::ProgressiveEvalExec;
 use crate::statistics::MinMaxStatistics;
-use crate::stream::RecordBatchStreamAdapter;
-use futures::StreamExt;
 use log::{debug, trace};
 
 /// Sort preserving merge execution plan
@@ -102,14 +99,13 @@ pub struct SortPreservingMergeExec {
     ///
     /// See [`Self::with_round_robin_repartition`] for more information.
     enable_round_robin_repartition: bool,
+    ///
+    progressive_eval_exec: Option<Arc<ProgressiveEvalExec>>,
 }
 
 impl SortPreservingMergeExec {
     /// Create a new sort execution plan
-    pub fn new(
-        expr: LexOrdering,
-        input: Arc<dyn ExecutionPlan>,
-    ) -> Arc<dyn ExecutionPlan> {
+    pub fn new(expr: LexOrdering, input: Arc<dyn ExecutionPlan>) -> Self {
         let cache = Self::compute_properties(&input, expr.clone());
 
         // Todo: check if partition statistic is accurate
@@ -136,24 +132,23 @@ impl SortPreservingMergeExec {
             .filter(|groups| {
                 groups.len() < input.properties().partitioning.partition_count()
             });
+        let mut progressive_eval_exec = None;
         if let Some(partition_groups) = partition_groups {
-            // Return ProgressiveEvalExec when partition_groups exists
-            Arc::new(ProgressiveEvalExec::new(
-                input,
+            progressive_eval_exec = Some(Arc::new(ProgressiveEvalExec::new(
+                input.clone(),
                 None,
                 None,
                 partition_groups,
-            ))
-        } else {
-            // Return SortPreservingMergeExec otherwise
-            Arc::new(Self {
-                input,
-                expr,
-                metrics: ExecutionPlanMetricsSet::new(),
-                fetch: None,
-                cache,
-                enable_round_robin_repartition: true,
-            })
+            )));
+        }
+        Self {
+            input,
+            expr,
+            metrics: ExecutionPlanMetricsSet::new(),
+            fetch: None,
+            cache,
+            enable_round_robin_repartition: true,
+            progressive_eval_exec,
         }
     }
 
@@ -221,11 +216,14 @@ impl DisplayAs for SortPreservingMergeExec {
     ) -> std::fmt::Result {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                write!(f, "SortPreservingMergeExec: [{}]", self.expr)?;
-                if let Some(fetch) = self.fetch {
-                    write!(f, ", fetch={fetch}")?;
-                };
-
+                if let Some(progressive_eval) = &self.progressive_eval_exec {
+                    progressive_eval.fmt_as(t, f)?;
+                } else {
+                    write!(f, "SortPreservingMergeExec: [{}]", self.expr)?;
+                    if let Some(fetch) = self.fetch {
+                        write!(f, ", fetch={fetch}")?;
+                    };
+                }
                 Ok(())
             }
             DisplayFormatType::TreeRender => {
@@ -272,6 +270,7 @@ impl ExecutionPlan for SortPreservingMergeExec {
             fetch: limit,
             cache: self.cache.clone(),
             enable_round_robin_repartition: true,
+            progressive_eval_exec: self.progressive_eval_exec.clone(),
         }))
     }
 
@@ -299,11 +298,10 @@ impl ExecutionPlan for SortPreservingMergeExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(
+        Ok(Arc::new(
             SortPreservingMergeExec::new(self.expr.clone(), Arc::clone(&children[0]))
-                .with_fetch(self.fetch)
-                .unwrap(),
-        )
+                .with_fetch(self.fetch),
+        ))
     }
 
     fn execute(
@@ -311,6 +309,9 @@ impl ExecutionPlan for SortPreservingMergeExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
+        if let Some(progressive_eval) = &self.progressive_eval_exec {
+            return progressive_eval.execute(partition, context);
+        }
         trace!(
             "Start SortPreservingMergeExec::execute for partition: {}",
             partition
@@ -418,11 +419,13 @@ impl ExecutionPlan for SortPreservingMergeExec {
             });
         }
 
-        Ok(SortPreservingMergeExec::new(
-            updated_exprs,
-            make_with_child(projection, self.input())?,
-        )
-        .with_fetch(self.fetch()))
+        Ok(Some(Arc::new(
+            SortPreservingMergeExec::new(
+                updated_exprs,
+                make_with_child(projection, self.input())?,
+            )
+            .with_fetch(self.fetch()),
+        )))
     }
 }
 
