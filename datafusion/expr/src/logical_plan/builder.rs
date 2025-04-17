@@ -1711,7 +1711,20 @@ pub fn project(
     plan: LogicalPlan,
     expr: impl IntoIterator<Item = impl Into<SelectExpr>>,
 ) -> Result<LogicalPlan> {
-    project_with_validation(plan, expr.into_iter().map(|e| (e, true)))
+    // Collect expressions into a vector so we can check for the optimization case
+    let expr_vec: Vec<_> = expr.into_iter().map(|e| e.into()).collect();
+
+    // Optimization: If there's only one expression and it's a plain wildcard,
+    // return the input plan directly
+    if expr_vec.len() == 1 && !matches!(plan, LogicalPlan::Join(Join{ join_constraint: JoinConstraint::Using,..})){
+        if let SelectExpr::Wildcard(opt) = &expr_vec[0] {
+            // Only optimize for the simple wildcard case with no options
+            if opt.is_empty() {
+                return Ok(plan);
+            }
+        }
+    }
+    project_with_validation(plan, expr_vec.into_iter().map(|e| (e, true)))
 }
 
 /// Create Projection. Similar to project except that the expressions
@@ -2401,9 +2414,9 @@ mod tests {
         \n  Subquery:\
         \n    Filter: foo.a = bar.a\
         \n      Projection: foo.a\
-        \n        TableScan: foo\
+        \n        TableScan: foo projection=[a, b, c]\
         \n  Projection: bar.a\
-        \n    TableScan: bar";
+        \n    TableScan: bar projection=[a, b, c]";
         assert_eq!(expected, format!("{outer_query}"));
 
         Ok(())
@@ -2429,9 +2442,9 @@ mod tests {
         \n  Subquery:\
         \n    Filter: foo.a = bar.a\
         \n      Projection: foo.a\
-        \n        TableScan: foo\
+        \n        TableScan: foo projection=[a, b, c]\
         \n  Projection: bar.a\
-        \n    TableScan: bar";
+        \n    TableScan: bar projection=[a, b, c]";
         assert_eq!(expected, format!("{outer_query}"));
 
         Ok(())
@@ -2456,8 +2469,8 @@ mod tests {
         \n  Subquery:\
         \n    Filter: foo.a = bar.a\
         \n      Projection: foo.b\
-        \n        TableScan: foo\
-        \n  TableScan: bar";
+        \n        TableScan: foo projection=[a, b, c]\
+        \n  TableScan: bar projection=[a, b, c]";
         assert_eq!(expected, format!("{outer_query}"));
 
         Ok(())
@@ -2580,7 +2593,7 @@ mod tests {
 
         let expected = "\
         Unnest: lists[test_table.strings|depth=1] structs[]\
-        \n  TableScan: test_table";
+        \n  TableScan: test_table projection=[scalar, strings, structs, struct_singular, stringss]";
         assert_eq!(expected, format!("{plan}"));
 
         // Check unnested field is a scalar
@@ -2594,7 +2607,7 @@ mod tests {
 
         let expected = "\
         Unnest: lists[] structs[test_table.struct_singular]\
-        \n  TableScan: test_table";
+        \n  TableScan: test_table projection=[scalar, strings, structs, struct_singular, stringss]";
         assert_eq!(expected, format!("{plan}"));
 
         for field_name in &["a", "b"] {
@@ -2617,7 +2630,7 @@ mod tests {
         Unnest: lists[] structs[test_table.struct_singular]\
         \n  Unnest: lists[test_table.structs|depth=1] structs[]\
         \n    Unnest: lists[test_table.strings|depth=1] structs[]\
-        \n      TableScan: test_table";
+        \n      TableScan: test_table projection=[scalar, strings, structs, struct_singular, stringss]";
         assert_eq!(expected, format!("{plan}"));
 
         // Check unnested struct list field should be a struct.
@@ -2636,7 +2649,7 @@ mod tests {
 
         let expected = "\
         Unnest: lists[test_table.strings|depth=1, test_table.structs|depth=1] structs[test_table.struct_singular]\
-        \n  TableScan: test_table";
+        \n  TableScan: test_table projection=[scalar, strings, structs, struct_singular, stringss]";
         assert_eq!(expected, format!("{plan}"));
 
         // Unnesting missing column should fail.
@@ -2663,7 +2676,7 @@ mod tests {
 
         let expected = "\
         Unnest: lists[test_table.stringss|depth=1, test_table.stringss|depth=2] structs[test_table.struct_singular]\
-        \n  TableScan: test_table";
+        \n  TableScan: test_table projection=[scalar, strings, structs, struct_singular, stringss]";
         assert_eq!(expected, format!("{plan}"));
 
         // Check output columns has correct type

@@ -238,7 +238,7 @@ fn to_timestamp_expr_folded() -> Result<()> {
         .build()?;
 
     let expected = "Projection: TimestampNanosecond(1599566400000000000, None) AS to_timestamp(Utf8(\"2020-09-08T12:00:00+00:00\"))\
-            \n  TableScan: test"
+            \n  TableScan: test projection=[a, b, c, d, e]"
         .to_string();
     let actual = get_optimized_plan_formatted(plan, &Utc::now());
     assert_eq!(expected, actual);
@@ -263,7 +263,7 @@ fn now_less_than_timestamp() -> Result<()> {
     // Note that constant folder runs and folds the entire
     // expression down to a single constant (true)
     let expected = "Filter: Boolean(true)\
-                        \n  TableScan: test";
+                        \n  TableScan: test projection=[a, b, c, d, e]";
     let actual = get_optimized_plan_formatted(plan, &time);
 
     assert_eq!(expected, actual);
@@ -294,7 +294,7 @@ fn select_date_plus_interval() -> Result<()> {
     // Note that constant folder runs and folds the entire
     // expression down to a single constant (true)
     let expected = r#"Projection: Date32("2021-01-09") AS to_timestamp(Utf8("2020-09-08T12:05:00+00:00")) + IntervalDayTime("IntervalDayTime { days: 123, milliseconds: 0 }")
-  TableScan: test"#;
+  TableScan: test projection=[a, b, c, d, e]"#;
     let actual = get_optimized_plan_formatted(plan, &time);
 
     assert_eq!(expected, actual);
@@ -312,7 +312,7 @@ fn simplify_project_scalar_fn() -> Result<()> {
     // before simplify: power(t.f, 1.0)
     // after simplify:  t.f as "power(t.f, 1.0)"
     let expected = "Projection: test.f AS power(test.f,Float64(1))\
-                      \n  TableScan: test";
+                      \n  TableScan: test projection=[f]";
     let actual = get_optimized_plan_formatted(plan, &Utc::now());
     assert_eq!(expected, actual);
     Ok(())
@@ -334,7 +334,7 @@ fn simplify_scan_predicate() -> Result<()> {
 
     // before simplify: t.g = power(t.f, 1.0)
     // after simplify:  t.g = t.f"
-    let expected = "TableScan: test, full_filters=[g = f]";
+    let expected = "TableScan: test projection=[f, g], full_filters=[g = f]";
     let actual = get_optimized_plan_formatted(plan, &Utc::now());
     assert_eq!(expected, actual);
     Ok(())
@@ -491,7 +491,7 @@ fn multiple_now() -> Result<()> {
     let actual = get_optimized_plan_formatted(plan, &time);
     let expected = format!(
         "Projection: TimestampNanosecond({}, Some(\"+00:00\")) AS now(), TimestampNanosecond({}, Some(\"+00:00\")) AS t2\
-            \n  TableScan: test",
+            \n  TableScan: test projection=[a, b, c, d, e]",
         time.timestamp_nanos_opt().unwrap(),
         time.timestamp_nanos_opt().unwrap()
     );

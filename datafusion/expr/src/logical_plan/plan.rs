@@ -2625,11 +2625,14 @@ impl TableScan {
                 df_schema.with_functional_dependencies(func_dependencies)
             })?;
         let projected_schema = Arc::new(projected_schema);
-
         Ok(Self {
             table_name,
             source: table_source,
-            projection,
+            projection: if projection.is_none() {
+                Some((0..schema.fields.len()).collect())
+            } else {
+                projection
+            },
             projected_schema,
             filters,
             fetch,
@@ -4563,7 +4566,7 @@ digraph {
 
         let expected = "Explain\
                         \n  Filter: foo = Boolean(true)\
-                        \n    TableScan: ?table?";
+                        \n    TableScan: ?table? projection=[foo, bar]";
         let actual = format!("{}", plan.display_indent());
         assert_eq!(expected.to_string(), actual)
     }

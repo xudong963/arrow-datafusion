@@ -1189,13 +1189,13 @@ async fn join_on() -> Result<()> {
         [col("a.c1").not_eq(col("b.c1")), col("a.c2").eq(col("b.c2"))],
     )?;
 
-    assert_snapshot!(join.logical_plan(), @r###"
+    assert_snapshot!(join.logical_plan(), @r"
     Inner Join:  Filter: a.c1 != b.c1 AND a.c2 = b.c2
       Projection: a.c1, a.c2
-        TableScan: a
+        TableScan: a projection=[c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13]
       Projection: b.c1, b.c2
-        TableScan: b
-    "###);
+        TableScan: b projection=[c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13]
+    ");
 
     Ok(())
 }
@@ -1588,10 +1588,10 @@ async fn with_column_join_same_columns() -> Result<()> {
           Inner Join: t1.c1 = t2.c1
             SubqueryAlias: t1
               Projection: aggregate_test_100.c1
-                TableScan: aggregate_test_100
+                TableScan: aggregate_test_100 projection=[c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13]
             SubqueryAlias: t2
               Projection: aggregate_test_100.c1
-                TableScan: aggregate_test_100
+                TableScan: aggregate_test_100 projection=[c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13]
     "
     );
 
@@ -1759,10 +1759,10 @@ async fn with_column_renamed_join() -> Result<()> {
           Inner Join: t1.c1 = t2.c1
             SubqueryAlias: t1
               Projection: aggregate_test_100.c1, aggregate_test_100.c2, aggregate_test_100.c3
-                TableScan: aggregate_test_100
+                TableScan: aggregate_test_100 projection=[c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13]
             SubqueryAlias: t2
               Projection: aggregate_test_100.c1, aggregate_test_100.c2, aggregate_test_100.c3
-                TableScan: aggregate_test_100
+                TableScan: aggregate_test_100 projection=[c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13]
     "
     );
 
@@ -5585,11 +5585,11 @@ async fn test_alias() -> Result<()> {
         .into_unoptimized_plan()
         .display_indent_schema()
         .to_string();
-    assert_snapshot!(plan, @r###"
+    assert_snapshot!(plan, @r"
     SubqueryAlias: table_alias [a:Utf8, b:Int32, one:Int32]
       Projection: test.a, test.b, Int32(1) AS one [a:Utf8, b:Int32, one:Int32]
-        TableScan: test [a:Utf8, b:Int32]
-    "###);
+        TableScan: test projection=[a, b] [a:Utf8, b:Int32]
+    ");
 
     // Select over the aliased DataFrame
     let df = df.select(vec![
@@ -5658,10 +5658,10 @@ async fn test_alias_empty() -> Result<()> {
         .into_unoptimized_plan()
         .display_indent_schema()
         .to_string();
-    assert_snapshot!(plan, @r###"
+    assert_snapshot!(plan, @r"
     SubqueryAlias:  [a:Utf8, b:Int32]
-      TableScan: test [a:Utf8, b:Int32]
-    "###);
+      TableScan: test projection=[a, b] [a:Utf8, b:Int32]
+    ");
 
     assert_snapshot!(
         batches_to_sort_string(&df.select(vec![col("a"), col("b")])?.collect().await.unwrap()),
