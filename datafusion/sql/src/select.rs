@@ -99,6 +99,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
         // Having and group by clause may reference aliases defined in select projection
         let projected_plan = self.project(base_plan.clone(), select_exprs)?;
+        let mut is_from_wildcard = false;
+        if let LogicalPlan::Projection(p) = &projected_plan {
+            is_from_wildcard = p.is_from_wildcard;
+        }
         let select_exprs = projected_plan.expressions();
 
         // Place the fields of the base plan at the front so that when there are references
@@ -243,7 +247,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         };
 
         // Try processing unnest expression or do the final projection
-        let plan = self.try_process_unnest(plan, select_exprs_post_aggr)?;
+        let plan =
+            self.try_process_unnest(plan, select_exprs_post_aggr, is_from_wildcard)?;
 
         // Process distinct clause
         let plan = match select.distinct {
@@ -301,6 +306,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         &self,
         input: LogicalPlan,
         select_exprs: Vec<Expr>,
+        is_from_wildcard: bool,
     ) -> Result<LogicalPlan> {
         // Try process group by unnest
         let input = self.try_process_aggregate_unnest(input)?;
@@ -333,9 +339,17 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             if unnest_columns.is_empty() {
                 // The original expr does not contain any unnest
                 if i == 0 {
-                    return LogicalPlanBuilder::from(intermediate_plan)
+                    let plan = LogicalPlanBuilder::from(intermediate_plan)
                         .project(intermediate_select_exprs)?
-                        .build();
+                        .build()?;
+                    if is_from_wildcard {
+                        if let LogicalPlan::Projection(p) = plan {
+                            return Ok(LogicalPlan::Projection(
+                                p.with_from_wildcard(is_from_wildcard),
+                            ));
+                        }
+                    }
+                    return Ok(plan);
                 }
                 break;
             } else {

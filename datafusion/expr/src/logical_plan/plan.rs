@@ -623,7 +623,11 @@ impl LogicalPlan {
                 expr,
                 input,
                 schema: _,
-            }) => Projection::try_new(expr, input).map(LogicalPlan::Projection),
+                is_from_wildcard,
+            }) => Ok(
+                Projection::try_new(expr, input)?.with_from_wildcard(is_from_wildcard)
+            )
+            .map(LogicalPlan::Projection),
             LogicalPlan::Dml(_) => Ok(self),
             LogicalPlan::Copy(_) => Ok(self),
             LogicalPlan::Values(Values { schema, values }) => {
@@ -2119,6 +2123,8 @@ pub struct Projection {
     pub input: Arc<LogicalPlan>,
     /// The schema description of the output
     pub schema: DFSchemaRef,
+    /// Is the projection a wildcard projection
+    pub is_from_wildcard: bool,
 }
 
 // Manual implementation needed because of `schema` field. Comparison excludes this field.
@@ -2154,6 +2160,7 @@ impl Projection {
             expr,
             input,
             schema,
+            is_from_wildcard: false,
         })
     }
 
@@ -2164,7 +2171,19 @@ impl Projection {
             expr,
             input,
             schema,
+            is_from_wildcard: false,
         }
+    }
+
+    pub fn with_from_wildcard(self, is_from_wildcard: bool) -> Self {
+        Self {
+            is_from_wildcard,
+            ..self
+        }
+    }
+
+    pub fn is_from_wildcard(&self) -> bool {
+        self.is_from_wildcard
     }
 }
 
@@ -2629,7 +2648,12 @@ impl TableScan {
         Ok(Self {
             table_name,
             source: table_source,
-            projection,
+            projection: if projection.is_none() {
+                // Some((0..schema.fields.len()).collect())
+                projection
+            } else {
+                projection
+            },
             projected_schema,
             filters,
             fetch,

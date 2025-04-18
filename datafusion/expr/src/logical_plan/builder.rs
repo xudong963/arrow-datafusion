@@ -667,11 +667,15 @@ impl LogicalPlanBuilder {
         missing_cols: &IndexSet<Column>,
         is_distinct: bool,
     ) -> Result<LogicalPlan> {
+        if missing_cols.is_empty() {
+            return Ok(curr_plan);
+        }
         match curr_plan {
             LogicalPlan::Projection(Projection {
                 input,
                 mut expr,
                 schema: _,
+                is_from_wildcard: _,
             }) if missing_cols.iter().all(|c| input.schema().has_column(c)) => {
                 let mut missing_exprs = missing_cols
                     .iter()
@@ -1725,8 +1729,28 @@ fn project_with_validation(
     plan: LogicalPlan,
     expr: impl IntoIterator<Item = (impl Into<SelectExpr>, bool)>,
 ) -> Result<LogicalPlan> {
+    // Collect expressions into a vector so we can check for the optimization case
+    let expr_vec: Vec<_> = expr.into_iter().map(|(e, b)| (e.into(), b)).collect();
+
+    let mut is_from_wildcard = false;
+    if expr_vec.len() == 1
+        && !matches!(
+            plan,
+            LogicalPlan::Join(Join {
+                join_constraint: JoinConstraint::Using,
+                ..
+            })
+        )
+    {
+        if let SelectExpr::Wildcard(opt) = &expr_vec[0].0 {
+            // Only optimize for the simple wildcard case with no options
+            if opt.is_empty() {
+                is_from_wildcard = true;
+            }
+        }
+    }
     let mut projected_expr = vec![];
-    for (e, validate) in expr {
+    for (e, validate) in expr_vec {
         let e = e.into();
         match e {
             SelectExpr::Wildcard(opt) => {
@@ -1781,7 +1805,8 @@ fn project_with_validation(
     }
     validate_unique_names("Projections", projected_expr.iter())?;
 
-    Projection::try_new(projected_expr, Arc::new(plan)).map(LogicalPlan::Projection)
+    Projection::try_new(projected_expr, Arc::new(plan))
+        .map(|p| LogicalPlan::Projection(p.with_from_wildcard(is_from_wildcard)))
 }
 
 /// If there is a REPLACE statement in the projected expression in the form of

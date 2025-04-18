@@ -78,11 +78,13 @@ impl TreeNode for LogicalPlan {
                 expr,
                 input,
                 schema,
+                is_from_wildcard,
             }) => input.map_elements(f)?.update_data(|input| {
                 LogicalPlan::Projection(Projection {
                     expr,
                     input,
                     schema,
+                    is_from_wildcard,
                 })
             }),
             LogicalPlan::Filter(Filter {
@@ -499,13 +501,23 @@ impl LogicalPlan {
                 expr,
                 input,
                 schema,
-            }) => expr.map_elements(f)?.update_data(|expr| {
-                LogicalPlan::Projection(Projection {
-                    expr,
-                    input,
-                    schema,
+                is_from_wildcard,
+            }) => {
+                let old_expr = expr.clone();
+                expr.map_elements(f)?.update_data(|expr| {
+                    let is_from_wildcard = if old_expr == expr {
+                        is_from_wildcard
+                    } else {
+                        false
+                    };
+                    LogicalPlan::Projection(Projection {
+                        expr,
+                        input,
+                        schema,
+                        is_from_wildcard,
+                    })
                 })
-            }),
+            }
             LogicalPlan::Values(Values { schema, values }) => values
                 .map_elements(f)?
                 .update_data(|values| LogicalPlan::Values(Values { schema, values })),

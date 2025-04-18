@@ -119,9 +119,16 @@ fn optimize_projections(
     // their parents' required indices.
     match plan {
         LogicalPlan::Projection(proj) => {
+            if proj.is_from_wildcard {
+                return optimize_projections(
+                    Arc::unwrap_or_clone(proj.input),
+                    config,
+                    indices,
+                );
+            }
             return merge_consecutive_projections(proj)?.transform_data(|proj| {
                 rewrite_projection_given_requirements(proj, config, &indices)
-            })
+            });
         }
         LogicalPlan::Aggregate(aggregate) => {
             // Split parent requirements to GROUP BY and aggregate sections:
