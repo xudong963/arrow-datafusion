@@ -74,9 +74,9 @@ impl RowGroupAccessPlanFilter {
         self.access_plan.row_group_index_iter().count()
     }
 
-    /// Returns the inner access plan
-    pub fn build(self) -> ParquetAccessPlan {
-        self.access_plan
+    /// Returns the inner access plan and the is_fully_matched flags
+    pub fn build(self) -> (ParquetAccessPlan, Vec<bool>) {
+        (self.access_plan, self.is_fully_matched)
     }
 
     /// Returns the is_fully_matched vector

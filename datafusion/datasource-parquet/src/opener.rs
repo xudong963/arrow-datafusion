@@ -452,40 +452,6 @@ impl FileOpener for ParquetOpener {
                 reader_metadata,
             );
 
-            // ---------------------------------------------------------------------
-            // Step: optionally add row filter to the builder
-            //
-            // Row filter is used for late materialization in parquet decoding, see
-            // `row_filter` for details.
-            // ---------------------------------------------------------------------
-
-            // Filter pushdown: evaluate predicates during scan
-            if let Some(predicate) = pushdown_filters.then_some(predicate).flatten() {
-                let row_filter = row_filter::build_row_filter(
-                    &predicate,
-                    &physical_file_schema,
-                    builder.metadata(),
-                    reorder_predicates,
-                    &file_metrics,
-                );
-
-                match row_filter {
-                    Ok(Some(filter)) => {
-                        builder = builder.with_row_filter(filter);
-                    }
-                    Ok(None) => {}
-                    Err(e) => {
-                        debug!(
-                            "Ignoring error building row filter for '{predicate:?}': {e}"
-                        );
-                    }
-                };
-            };
-            if force_filter_selections {
-                builder =
-                    builder.with_row_selection_policy(RowSelectionPolicy::Selectors);
-            }
-
             // ------------------------------------------------------------
             // Step: prune row groups by range, predicate and bloom filter
             // ------------------------------------------------------------
@@ -493,7 +459,6 @@ impl FileOpener for ParquetOpener {
             // Determine which row groups to actually read. The idea is to skip
             // as many row groups as possible based on the metadata and query
             let file_metadata = Arc::clone(builder.metadata());
-            let predicate = pruning_predicate.as_ref().map(|p| p.as_ref());
             let rg_metadata = file_metadata.row_groups();
             // track which row groups to actually read
             let access_plan =
@@ -504,14 +469,14 @@ impl FileOpener for ParquetOpener {
                 row_groups.prune_by_range(rg_metadata, range);
             }
 
-            // If there is a predicate that can be evaluated against the metadata
-            if let Some(predicate) = predicate.as_ref() {
+            // If there is a pruning predicate that can be evaluated against the metadata
+            if let Some(pruning_pred) = pruning_predicate.as_ref() {
                 if enable_row_group_stats_pruning {
                     row_groups.prune_by_statistics(
                         &physical_file_schema,
                         builder.parquet_schema(),
                         rg_metadata,
-                        predicate,
+                        pruning_pred,
                         &file_metrics,
                     );
                 } else {
@@ -527,7 +492,7 @@ impl FileOpener for ParquetOpener {
                         .prune_by_bloom_filters(
                             &physical_file_schema,
                             &mut builder,
-                            predicate,
+                            pruning_pred,
                             &file_metrics,
                         )
                         .await;
@@ -554,10 +519,59 @@ impl FileOpener for ParquetOpener {
                 row_groups.prune_by_limit(limit, rg_metadata, &file_metrics);
             }
 
+            // Extract fully-matched info before consuming row_groups
+            let (mut access_plan, is_fully_matched) = row_groups.build();
+
+            // Collect fully-matched row group indexes for skipping predicate evaluation
+            let skip_row_groups: std::collections::HashSet<usize> = access_plan
+                .row_group_index_iter()
+                .filter(|&idx| is_fully_matched[idx])
+                .collect();
+
+            // ---------------------------------------------------------------------
+            // Step: optionally add row filter to the builder
+            //
+            // Row filter is used for late materialization in parquet decoding, see
+            // `row_filter` for details.
+            // ---------------------------------------------------------------------
+
+            // Filter pushdown: evaluate predicates during scan
+            if let Some(predicate) = pushdown_filters.then_some(predicate).flatten() {
+                let row_filter = row_filter::build_row_filter(
+                    &predicate,
+                    &physical_file_schema,
+                    builder.metadata(),
+                    reorder_predicates,
+                    &file_metrics,
+                );
+
+                match row_filter {
+                    Ok(Some(filter)) => {
+                        // Pass fully-matched info to the filter so it can
+                        // skip predicate evaluation for those row groups
+                        let filter = if skip_row_groups.is_empty() {
+                            filter
+                        } else {
+                            filter.with_skip_row_groups(skip_row_groups)
+                        };
+                        builder = builder.with_row_filter(filter);
+                    }
+                    Ok(None) => {}
+                    Err(e) => {
+                        debug!(
+                            "Ignoring error building row filter for '{predicate:?}': {e}"
+                        );
+                    }
+                };
+            };
+            if force_filter_selections {
+                builder =
+                    builder.with_row_selection_policy(RowSelectionPolicy::Selectors);
+            }
+
             // --------------------------------------------------------
             // Step: prune pages from the kept row groups
             //
-            let mut access_plan = row_groups.build();
             // page index pruning: if all data on individual pages can
             // be ruled using page metadata, rows from other columns
             // with that range can be skipped as well
