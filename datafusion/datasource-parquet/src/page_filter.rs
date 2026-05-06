@@ -193,10 +193,24 @@ impl PagePruningAccessPlanFilter {
         let mut total_pages_skip = 0;
         // track the total number of pages that should not be skipped
         let mut total_pages_select = 0;
+        // track rows that were already proven fully matched at row group
+        // level and therefore did not need page-index predicate evaluation
+        let mut total_rows_fully_matched = 0;
 
         // for each row group specified in the access plan
         let row_group_indexes = access_plan.row_group_indexes();
         for row_group_index in row_group_indexes {
+            // Skip page pruning for fully matched row groups: all rows are
+            // known to satisfy the predicate, so page-level pruning is wasted work.
+            if access_plan.is_fully_matched(row_group_index) {
+                // Page metrics count evaluated page-index pruning work; this
+                // branch only records rows already proven fully matched.
+                let row_count = groups[row_group_index].num_rows() as usize;
+                total_select += row_count;
+                total_rows_fully_matched += row_count;
+
+                continue;
+            }
             // The selection for this particular row group
             let mut overall_selection = None;
             for predicate in page_index_predicates {
@@ -284,6 +298,9 @@ impl PagePruningAccessPlanFilter {
         file_metrics
             .page_index_rows_pruned
             .add_matched(total_select);
+        file_metrics
+            .page_index_rows_pruned
+            .add_fully_matched(total_rows_fully_matched);
         file_metrics
             .page_index_pages_pruned
             .add_pruned(total_pages_skip);
