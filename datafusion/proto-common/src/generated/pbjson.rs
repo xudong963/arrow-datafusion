@@ -3999,7 +3999,7 @@ impl serde::Serialize for ExplainAnalyzeCategoriesNode {
         if !self.only.is_empty() {
             let v = self.only.iter().cloned().map(|v| {
                 MetricCategory::try_from(v)
-                    .map_err(|_| serde::ser::Error::custom(format!("Invalid variant {}", v)))
+                    .map_err(|_| serde::ser::Error::custom(format!("Invalid variant {v}")))
                 }).collect::<std::result::Result<Vec<_>, _>>()?;
             struct_ser.serialize_field("only", &v)?;
         }
