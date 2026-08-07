@@ -16,6 +16,7 @@
 // under the License.
 
 use insta::assert_snapshot;
+use std::fs::File;
 use std::sync::Arc;
 
 use crate::physical_optimizer::test_utils::{
@@ -27,8 +28,9 @@ use crate::physical_optimizer::test_utils::{
 
 use arrow::compute::SortOptions;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use datafusion::datasource::MemTable;
 use datafusion::datasource::stream::{FileStreamProvider, StreamConfig, StreamTable};
-use datafusion::prelude::{CsvReadOptions, SessionContext};
+use datafusion::prelude::{CsvReadOptions, SessionConfig, SessionContext};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{JoinType, NullEquality, Result, ScalarValue};
 use datafusion_physical_expr::expressions::{Literal, col};
@@ -358,6 +360,56 @@ async fn test_hash_cross_join() -> Result<()> {
     };
 
     case.run().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_ie_join_rejects_unbounded_inputs() -> Result<()> {
+    for (left_unbounded, right_unbounded) in [(true, false), (false, true), (true, true)]
+    {
+        let mut config = SessionConfig::new();
+        config.options_mut().optimizer.enable_ie_join = true;
+        let ctx = SessionContext::new_with_config(config);
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("c2", DataType::UInt32, false),
+            Field::new("c3", DataType::Int8, false),
+        ]));
+        let temp_dir = tempfile::tempdir()?;
+        for (table_name, unbounded) in
+            [("left", left_unbounded), ("right", right_unbounded)]
+        {
+            if unbounded {
+                let path = temp_dir.path().join(format!("{table_name}.csv"));
+                File::create(&path)?;
+                let source = FileStreamProvider::new_file(Arc::clone(&schema), path);
+                let stream = StreamConfig::new(Arc::new(source));
+                ctx.register_table(
+                    table_name,
+                    Arc::new(StreamTable::new(Arc::new(stream))),
+                )?;
+            } else {
+                ctx.register_table(
+                    table_name,
+                    Arc::new(MemTable::try_new(Arc::clone(&schema), vec![vec![]])?),
+                )?;
+            }
+        }
+
+        let error = ctx
+            .sql(
+                "SELECT t1.c2 \
+                 FROM left AS t1 JOIN right AS t2 \
+                 ON t1.c2 < t2.c2 AND t1.c3 > t2.c3",
+            )
+            .await?
+            .create_physical_plan()
+            .await
+            .expect_err("IEJoin must reject unbounded inputs");
+        assert!(
+            error.to_string().contains("operator: IEJoinExec"),
+            "unexpected planning error: {error:?}"
+        );
+    }
     Ok(())
 }
 
